@@ -1,247 +1,210 @@
 # Infrastructure GitOps Repository
 
-This repository contains Terraform configurations for deploying **Apache Flink** and **ClickHouse** on existing Kubernetes clusters using a GitOps approach.
+Terraform configurations for deploying **Apache Flink** and **ClickHouse** (with Kafka integration) on Kubernetes.
 
 ## Repository Structure
 
 ```
 .
-├── modules/                    # Reusable Terraform modules
-│   ├── flink/                  # Flink Kubernetes Operator module
-│   │   ├── main.tf
-│   │   ├── variables.tf
-│   │   ├── outputs.tf
-│   │   ├── versions.tf
-│   │   └── templates/
-│   │       ├── values.yaml.tpl
-│   │       └── flink-conf.yaml.tpl
-│   └── clickhouse/             # ClickHouse Operator module
+├── modules/
+│   ├── flink/                      # Flink Kubernetes Operator
+│   │   ├── operator/               # Operator deployment
+│   │   ├── deployment/             # FlinkDeployment resources
+│   │   └── session-job/            # FlinkSessionJob resources
+│   └── clickhouse-kafka/           # ClickHouse with Kafka Table Engine
 │       ├── main.tf
 │       ├── variables.tf
 │       ├── outputs.tf
 │       ├── versions.tf
+│       ├── migrations/             # SQL migrations (run in order)
+│       │   └── 001_init.sql
 │       └── templates/
-│           ├── operator-values.yaml.tpl
-│           └── clickhouse-cluster.yaml.tpl
-├── environments/               # Environment-specific configurations
-│   ├── dev/                    # Development environment
-│   ├── staging/                # Staging environment
-│   └── prod/                   # Production environment
-├── .gitignore
+│           ├── clickhouse-migrations-configmap.yaml
+│           └── clickhouse-run-migrations-job.yaml
+├── environments/
+│   ├── dev/
+│   ├── staging/
+│   └── prod/
+├── examples/
+│   ├── clickhouse-kafka-local/     # Local development setup
+│   ├── flink-application/
+│   └── flink-session-cluster/
 └── README.md
 ```
 
 ## Prerequisites
 
 - Terraform >= 1.5.0
-- Existing Kubernetes cluster
+- Kubernetes cluster (minikube, kind, Docker Desktop, or cloud)
 - `kubectl` configured with cluster access
 - Helm 3.x
 
-## Quick Start
+## Quick Start: Local ClickHouse + Kafka
 
-### 1. Clone the repository
+### 1. Start local Kubernetes
 
 ```bash
-git clone <repository-url>
-cd test-gitops
+# Using Docker Desktop: Enable Kubernetes in settings
+
+# Or using minikube:
+minikube start --memory=4096 --cpus=2
 ```
 
-### 2. Configure your environment
+### 2. Deploy ClickHouse with Kafka
 
 ```bash
-cd environments/dev  # or staging/prod
+cd examples/clickhouse-kafka-local
 
-# Copy the example tfvars file
-cp terraform.tfvars.example terraform.tfvars
-
-# Edit with your configuration
-vim terraform.tfvars
-```
-
-### 3. Initialize and apply
-
-```bash
-# Initialize Terraform
 terraform init
-
-# Review the plan
-terraform plan
-
-# Apply the configuration
 terraform apply
+```
+
+This deploys:
+- **Strimzi Kafka Operator** + Kafka cluster
+- **Altinity ClickHouse Operator** + ClickHouse instance
+- **SQL migrations** via Kubernetes Job
+
+### 3. Verify deployment
+
+```bash
+# Check pods
+kubectl get pods -n clickhouse
+kubectl get pods -n kafka
+
+# View migration logs
+kubectl logs -n clickhouse -l job-name --tail=100
+
+# Connect to ClickHouse
+kubectl exec -it -n clickhouse chi-clickhouse-clickhouse-0-0-0 -- clickhouse-client
+
+# Check tables
+SHOW TABLES;
+SELECT * FROM metric_updates;
+```
+
+### 4. Test Kafka → ClickHouse pipeline
+
+```bash
+# Terminal 1: Produce messages
+kubectl exec -it -n kafka kafka-kafka-0 -- /opt/kafka/bin/kafka-console-producer.sh \
+  --broker-list localhost:9092 \
+  --topic metric-updates
+
+# Enter JSON messages:
+{"metric_name":"cpu","metric_value":45.2,"tags":{"host":"server1"},"timestamp":"2024-01-15 10:30:00"}
+{"metric_name":"memory","metric_value":78.5,"tags":{"host":"server1"},"timestamp":"2024-01-15 10:30:01"}
+
+# Terminal 2: Query ClickHouse
+kubectl exec -it -n clickhouse chi-clickhouse-clickhouse-0-0-0 -- clickhouse-client \
+  --query "SELECT * FROM metric_updates"
 ```
 
 ## Modules
 
-### Flink Module
+### ClickHouse-Kafka Module
 
-Deploys the Apache Flink Kubernetes Operator and optionally creates default configurations.
-
-**Features:**
-- Deploys Flink Kubernetes Operator via Helm
-- Configurable resource limits and requests
-- Optional default Flink configuration ConfigMap
-- Support for RocksDB state backend
-- Checkpoint configuration
-
-**Usage:**
-
-```hcl
-module "flink" {
-  source = "../../modules/flink"
-
-  namespace        = "flink"
-  release_name     = "flink-operator"
-  operator_version = "1.8.0"
-  
-  resource_requests = {
-    cpu    = "100m"
-    memory = "256Mi"
-  }
-}
-```
-
-### ClickHouse Module
-
-Deploys the Altinity ClickHouse Operator and optionally creates a ClickHouse cluster.
-
-**Features:**
-- Deploys Altinity ClickHouse Operator via Helm
-- Creates ClickHouse cluster via Custom Resource
-- Configurable sharding and replication
-- ZooKeeper integration for replication
-- Persistent storage configuration
-
-**Usage:**
+Deploys ClickHouse with Kafka Table Engine support.
 
 ```hcl
 module "clickhouse" {
-  source = "../../modules/clickhouse"
+  source = "../../modules/clickhouse-kafka"
 
-  namespace      = "clickhouse"
-  cluster_name   = "my-cluster"
-  cluster_replicas = 3
-  cluster_shards   = 2
-  
-  storage_size = "100Gi"
+  namespace     = "clickhouse"
+  release_name  = "clickhouse"
+  kafka_brokers = "kafka-kafka-bootstrap.kafka.svc.cluster.local:9092"
+
+  # Optional: force re-run migrations
+  migrations_force_run = "v1"
 }
 ```
 
-## Environment Configurations
+**Features:**
+- Altinity ClickHouse Operator
+- Kafka Table Engine pre-configured
+- SQL migrations via ConfigMap + Job
+- Auto-detects migration changes via content hash
 
-### Development (`environments/dev`)
-- Single replica deployments
-- Minimal resource allocation
-- No ZooKeeper (single node ClickHouse)
-- Suitable for local development and testing
+### SQL Migrations
 
-### Staging (`environments/staging`)
-- 2 replicas for HA testing
-- Moderate resource allocation
-- ZooKeeper enabled for replication testing
-- Mirrors production topology at smaller scale
+SQL files in `modules/clickhouse-kafka/migrations/` run automatically in sorted order.
 
-### Production (`environments/prod`)
-- High availability configuration
-- Full resource allocation
-- ZooKeeper enabled
-- Multi-shard ClickHouse cluster
-- Optimized checkpoint and restart strategies
+```bash
+# Add a new migration
+cat > modules/clickhouse-kafka/migrations/002_add_index.sql << 'EOF'
+ALTER TABLE metric_updates ADD INDEX idx_name metric_name TYPE bloom_filter;
+EOF
 
-## Configuration
-
-### Kubernetes Authentication
-
-Configure access to your Kubernetes cluster:
-
-```hcl
-# In terraform.tfvars
-kubeconfig_path    = "~/.kube/config"
-kubeconfig_context = "my-cluster-context"
+# Apply - creates new job with updated hash
+terraform apply
 ```
 
-### Remote State Backend
-
-Uncomment and configure the backend block in `main.tf`:
+**Force re-run** (when job template changes but SQL doesn't):
 
 ```hcl
-terraform {
-  backend "s3" {
-    bucket         = "your-terraform-state-bucket"
-    key            = "env/terraform.tfstate"
-    region         = "us-east-1"
-    encrypt        = true
-    dynamodb_table = "terraform-locks"
-  }
+module "clickhouse" {
+  # ...
+  migrations_force_run = "v2"  # bump this value
 }
 ```
 
-## GitOps Workflow
+### Flink Module
 
-### Recommended CI/CD Pipeline
+```hcl
+# Deploy Flink Operator
+module "flink_operator" {
+  source = "../../modules/flink/operator"
 
-1. **Pull Request**: `terraform plan` runs automatically
-2. **Review**: Team reviews the plan output
-3. **Merge**: After approval, merge to main
-4. **Apply**: CI/CD applies changes to the cluster
+  namespace        = "flink"
+  operator_version = "1.8.0"
+}
 
-### Branch Strategy
+# Deploy a Flink application
+module "flink_app" {
+  source = "../../modules/flink/deployment"
 
-- `main` - Production deployments
-- `staging` - Staging deployments
-- `feature/*` - Feature branches for development
-
-## Accessing Services
-
-### Flink
-
-After deployment, access the Flink dashboard:
-
-```bash
-kubectl port-forward -n flink-<env> svc/flink-operator-webhook 8443:443
+  namespace    = "flink"
+  name         = "my-app"
+  job_jar      = "local:///opt/flink/examples/streaming/WordCount.jar"
+  parallelism  = 2
+}
 ```
 
-### ClickHouse
-
-Connect to ClickHouse:
+## Cleanup
 
 ```bash
-# Port forward the native protocol
-kubectl port-forward -n clickhouse-<env> svc/clickhouse-<cluster-name> 9000:9000
+# Destroy all resources
+cd examples/clickhouse-kafka-local
+terraform destroy
 
-# Connect with clickhouse-client
-clickhouse-client --host localhost --port 9000
+# Force cleanup stuck namespaces
+kubectl delete namespace clickhouse --force --grace-period=0
+kubectl delete namespace kafka --force --grace-period=0
 ```
 
 ## Troubleshooting
 
-### Common Issues
+### Job won't update (immutable error)
+```bash
+# Delete old job, then re-apply
+kubectl delete job -n clickhouse -l app=clickhouse --all
+terraform apply
+```
 
-1. **Operator not starting**: Check if CRDs are installed
-   ```bash
-   kubectl get crd | grep flink
-   kubectl get crd | grep clickhouse
-   ```
+### Namespace stuck terminating
+```bash
+kubectl get namespace clickhouse -o json | \
+  jq '.spec.finalizers = []' | \
+  kubectl replace --raw "/api/v1/namespaces/clickhouse/finalize" -f -
+```
 
-2. **Pods pending**: Check node resources and storage class availability
-   ```bash
-   kubectl describe pod <pod-name> -n <namespace>
-   ```
+### Check migration logs
+```bash
+kubectl logs -n clickhouse job/clickhouse-migrations-<hash>
+```
 
-3. **Helm release stuck**: Force cleanup if needed
-   ```bash
-   helm uninstall <release-name> -n <namespace>
-   ```
-
-## Contributing
-
-1. Create a feature branch
-2. Make changes
-3. Run `terraform fmt` and `terraform validate`
-4. Create a pull request
-5. Wait for plan output and review
+### ClickHouse authentication error
+The local setup disables authentication. For production, configure users in the `ClickHouseInstallation` spec.
 
 ## License
 
-[Your License Here]
+MIT
