@@ -1,0 +1,66 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${job_name}
+  namespace: ${namespace}
+spec:
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: ${service_account}
+      containers:
+        - name: migrate
+          image: clickhouse/clickhouse-server:24.3
+          command:
+            - bash
+            - -lc
+            - |
+              set -euo pipefail
+
+              echo "Waiting for ClickHouse at ${clickhouse_host}..."
+              until clickhouse-client \
+                --host "${clickhouse_host}" \
+                --user "${clickhouse_user}" \
+%{ if clickhouse_pass != "" ~}
+                --password "${clickhouse_pass}" \
+%{ endif ~}
+                --query "SELECT 1" >/dev/null 2>&1; do
+                sleep 3
+              done
+
+              echo "ClickHouse is up. Running migrations..."
+              echo ""
+              echo "=== Migration files found ==="
+              ls -1 /migrations | sort
+              echo ""
+
+              for f in $(ls -1 /migrations | sort); do
+                echo "=========================================="
+                echo "=== Applying: $f"
+                echo "=========================================="
+                echo ""
+                echo "--- SQL Content ---"
+                cat "/migrations/$f"
+                echo ""
+                echo "--- Executing ---"
+                clickhouse-client \
+                  --host "${clickhouse_host}" \
+                  --user "${clickhouse_user}" \
+%{ if clickhouse_pass != "" ~}
+                  --password "${clickhouse_pass}" \
+%{ endif ~}
+                  --multiquery < "/migrations/$f"
+                echo "✓ Completed: $f"
+                echo ""
+              done
+
+              echo "Migrations complete."
+          volumeMounts:
+            - name: migrations
+              mountPath: /migrations
+      volumes:
+        - name: migrations
+          configMap:
+            name: ${configmap_name}

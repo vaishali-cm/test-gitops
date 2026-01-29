@@ -1,0 +1,19 @@
+# Example terraform.tfvars for staging environment
+# Copy this file to terraform.tfvars and customize
+
+kubeconfig_path    = "~/.kube/config"
+kubeconfig_context = "staging-cluster"
+
+# Version overrides (optional)
+# flink_operator_version     = "1.8.0"
+# clickhouse_operator_version = "0.23.0"
+# clickhouse_version          = "24.3"
+
+# Infrastructure
+storage_class = "gp3"  # Or your cloud provider's storage class
+team_name     = "platform"
+
+# ZooKeeper (required for ClickHouse replication)
+zookeeper_enabled   = true
+zookeeper_namespace = "zookeeper"
+zookeeper_service   = "zookeeper"

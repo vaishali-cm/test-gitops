@@ -1,0 +1,14 @@
+# Example terraform.tfvars for dev environment
+# Copy this file to terraform.tfvars and customize
+
+kubeconfig_path    = "~/.kube/config"
+kubeconfig_context = "dev-cluster"
+
+# Version overrides (optional)
+# flink_operator_version     = "1.8.0"
+# clickhouse_operator_version = "0.23.0"
+# clickhouse_version          = "24.3"
+
+# Infrastructure
+storage_class = "standard"
+team_name     = "platform"

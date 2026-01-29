@@ -1,0 +1,46 @@
+# Example terraform.tfvars for production environment
+# Copy this file to terraform.tfvars and customize
+
+kubeconfig_path    = "~/.kube/config"
+kubeconfig_context = "prod-cluster"
+
+# Version configuration
+flink_operator_version      = "1.8.0"
+flink_version               = "v1_18"
+clickhouse_operator_version = "0.23.0"
+clickhouse_version          = "24.3"
+
+# Flink configuration
+flink_jobmanager_cpu       = 2
+flink_jobmanager_memory    = "4096m"
+flink_taskmanager_cpu      = 4
+flink_taskmanager_memory   = "8192m"
+flink_taskmanager_replicas = 6
+flink_task_slots           = 4
+
+# Flink storage paths (required for production)
+flink_checkpoint_path = "s3://my-bucket/flink/checkpoints"
+flink_savepoint_path  = "s3://my-bucket/flink/savepoints"
+flink_ha_path         = "s3://my-bucket/flink/ha"
+
+# Flink service account annotations (for IRSA on AWS)
+# flink_service_account_annotations = {
+#   "eks.amazonaws.com/role-arn" = "arn:aws:iam::123456789012:role/flink-role"
+# }
+
+# ClickHouse configuration
+clickhouse_replicas       = 3
+clickhouse_shards         = 2
+clickhouse_storage_size   = "500Gi"
+clickhouse_cpu_request    = "2"
+clickhouse_memory_request = "8Gi"
+clickhouse_cpu_limit      = "8"
+clickhouse_memory_limit   = "32Gi"
+
+# Infrastructure
+storage_class = "gp3"
+team_name     = "platform"
+
+# ZooKeeper
+zookeeper_namespace = "zookeeper"
+zookeeper_service   = "zookeeper"
